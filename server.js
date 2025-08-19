@@ -1,60 +1,78 @@
-app.post('/webhook', async (req, res) => {
-  res.status(200).send('ok'); // responde rápido para evitar retry da Z-API
+// server.js
+import express from "express";
+import fetch from "node-fetch";
+import bodyParser from "body-parser";
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(bodyParser.json());
+
+// Rota principal para teste
+app.get("/", (req, res) => {
+  res.send("ok");
+});
+
+// Webhook Z-API
+app.post("/webhook", async (req, res) => {
   try {
-    const body = req.body || {};
-    const text =
-      body?.text?.message ??
-      body?.message?.text ??
-      body?.message?.content ??
-      '';
-    const sender =
-      body?.participantPhone ?? body?.phone ?? body?.from ?? '';
+    const { body } = req;
+    console.log("Mensagem recebida:", body);
 
-    if (!text || !sender) return;
+    const mensagemRecebida = body.message || "";
+    const isGroup = body.isGroup || false;
+    const from = body.from;
 
-    // Ignora mensagens que não começam com @bot
-    if (!text.trim().toLowerCase().startsWith('@bot')) return;
-
-    // Remove @bot do início e pega o comando
-    const commandText = text.replace(/^@bot\s*/i, '').trim().toLowerCase();
-
-    let reply = '';
-
-    // Comandos especiais
-    if (commandText === 'ajuda') {
-      reply = 'Oi! Eu sou o bot 🤖. Use "@bot {mensagem}" para me perguntar qualquer coisa. Alguns comandos: ajuda, piada, sobre.';
-    } else if (commandText === 'piada') {
-      reply = 'Por que o computador foi ao médico? Porque ele tinha um vírus! 😂';
-    } else if (commandText === 'sobre') {
-      reply = 'Eu sou um bot conectado ao ChatGPT e Z-API, posso responder perguntas em tempo real!';
-    } else {
-      // Se não for comando especial, envia pro ChatGPT
-      const ai = await openai.responses.create({
-        model: MODEL,
-        input: `Responda em pt-BR, breve e útil. Pergunta: "${commandText}"`
-      });
-      reply = (ai.output_text || '').trim();
+    // Se for grupo, só responde se tiver @bot
+    if (isGroup && !mensagemRecebida.toLowerCase().includes("@bot")) {
+      return res.sendStatus(200); // não responde se não tiver menção
     }
 
-    if (!reply) return;
+    // Gerar resposta com ChatGPT
+    const respostaChatGPT = await gerarRespostaChatGPT(mensagemRecebida);
 
-    // Enviar resposta via Z-API
-    const url = `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE}/token/${process.env.ZAPI_TOKEN}/send-text`;
+    // Enviar resposta pelo Z-API
+    if (from) {
+      await fetch(`https://api.z-api.io/instances/YOUR_INSTANCE_ID/token/YOUR_TOKEN/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: from,
+          message: respostaChatGPT
+        }),
+      });
+    }
 
-    await axios.post(
-      url,
-      { phone: sender, message: `BOT: ${reply}` },
-      {
-        headers: {
-          'Client-Token': process.env.ZAPI_CLIENT_TOKEN,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      }
-    );
-
-  } catch (err) {
-    console.error('Erro no handler:', err?.response?.data || err.message);
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("Erro no webhook:", error);
+    res.sendStatus(500);
   }
+});
+
+// Função para chamar o ChatGPT
+async function gerarRespostaChatGPT(pergunta) {
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: pergunta }]
+      })
+    });
+    const data = await response.json();
+    return data.choices[0].message.content;
+  } catch (error) {
+    console.error("Erro ChatGPT:", error);
+    return "Desculpe, não consegui processar sua mensagem.";
+  }
+}
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
